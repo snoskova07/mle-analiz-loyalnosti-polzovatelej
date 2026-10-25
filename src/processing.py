@@ -7,8 +7,6 @@ from typing import List, Optional, Dict, Any
 from phik import phik_matrix
 from sqlalchemy import create_engine 
 from pathlib import Path
-from typing import Optional
-from sqlalchemy import create_engine
 
 class DataProcessor:
 
@@ -189,14 +187,17 @@ class DataProcessor:
     # Предобработка данных. Проверка значений категориальных столбцов на дубликаты
     def check_categorical_consistency(self, cols: list) -> "DataProcessor":
         df = self.df
+        count_duplicates = 0
         for col in cols:
             # Выводим уникальные значения в столбце 
             count_items = df[col].nunique()   
             # Приводим к нижнему регистру и считаем количество уникальных значений
             count_lower_case = df[col].str.lower().nunique()
             if count_items != count_lower_case:
-                print(f"Дубликаты в столбце {col}")
-        print(f"Дубликатов в категориальных столбцах нет") 
+                print(f"Найдены неявные дубликаты в столбце {col}. Нужно привести данные к одному регистру.")
+                count_duplicates += 1
+        if count_duplicates == 0:
+            print(f"Дубликатов в категориальных столбцах нет") 
         self.df = df
         return self
 
@@ -294,8 +295,9 @@ class DataProcessor:
 
             stats = stats.sort_values(by='share_two', ascending = False).reset_index()
 
-            for i in range(len(count_series)):
-                print(f"На {i+1} месте: {count_series.index[i]} - {count_series.iloc[i]} с долей {ratio_series.iloc[i]}")
+            for i in range(len(stats)):
+                row = stats.iloc[i]
+                print(f"На {i+1} месте: {row[col]} - {row['total_users']} с долей {row['share_two']}")
                 if i == 9:
                     break
 
@@ -311,7 +313,7 @@ class DataProcessor:
     # Гипотеза 1
     def test_hypothesis_event_repeat_rate(self, col: str,  more_ratio: str, min_ratio: str) -> "DataProcessor":
         print(f"\n--- Гипотеза 1 --- ")
-        print(f"Пользователи, которые совершили первый заказ на спортивные мероприятия, совершают повторный заказ чаще, чем пользователи, оформившие свой первый заказ на концерты.")
+        print(f"Пользователи, которые совершили первый заказ на мероприятие {more_ratio}, совершают повторный заказ чаще, чем пользователи, оформившие свой первый заказ на {min_ratio}.")
         df = self.df
         # Проводим подсчет общего количества пользователей в разрезе мероприятий и доли пользователей, совершивших заказ повторно
         stats = df.groupby(col).agg(
@@ -320,7 +322,7 @@ class DataProcessor:
         ).reset_index().sort_values(by='total_users', ascending = False)
 
         share_more = round(stats.loc[stats[col] == more_ratio, 'share_two'].values[0], 4)
-        share_min = round(stats.loc[df[col] == min_ratio, 'share_two'].values[0], 4)
+        share_min = round(stats.loc[stats[col] == min_ratio, 'share_two'].values[0], 4)
         if share_more > share_min:
             print(f"Гипотеза 1 верна: доля {more_ratio} ({share_more}) выше доли {min_ratio} ({share_min})")
         else: 
@@ -352,7 +354,6 @@ class DataProcessor:
         print(top_by_share[[col, 'share_two', 'total_users']].to_string(index=False))
 
         # Сравнение топ‑3 по пользователям: смотрим, сохраняется ли тренд «больше пользователей → выше доля»
-        regions = top_by_users[col].tolist()
         shares = top_by_users['share_two'].tolist()
 
         # Проверка монотонности: доля должна убывать или хотя бы не расти при переходе от 1→2→3
@@ -363,7 +364,6 @@ class DataProcessor:
                 "Это поддерживает гипотезу: более активные регионы имеют более высокую долю повторных заказов.")
         else:
             # Найдём, где тренд ломается
-            break_idx = next(i for i in range(len(shares) - 1) if shares[i] < shares[i + 1])
             print("Гипотеза 2 неверна: не во всех более активных регионах доля повторных выше.")
 
         self.df = df
@@ -437,6 +437,14 @@ class DataProcessor:
             .sort_values(by=segment_col, ascending=False)
         )
 
+        # Вывод коэффициентов
+        print("\nКоэффициенты phik связи признаков с сегментом числа заказов:")
+        for idx, row in segment_corr.iterrows():
+            print(f"  {idx}: {row[segment_col]:.3f}")
+
+        # Сохраняем топ‑3 для финального отчёта
+        self._top_correlations = segment_corr.head(3)
+
         # Визуализация
         plt.figure(figsize=(8, 4))
         sns.heatmap(
@@ -452,7 +460,10 @@ class DataProcessor:
         plt.title(f"Связь сегмента по числу заказов с другими признаками")
         plt.xlabel("Признак")
         plt.tight_layout()
-        plt.show()
+        output_path = "data/phik_heatmap.png"
+        plt.savefig(output_path, dpi=300)
+        print(f"\nТепловая карта сохранена в файл: {output_path}")
+        plt.close()  # Закрываем фигуру, чтобы не засорять память
         return self
 
     # Чтение из конфига
